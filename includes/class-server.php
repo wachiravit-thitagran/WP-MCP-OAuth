@@ -45,6 +45,7 @@ final class Server {
 	public function boot() {
 		add_action( 'parse_request', array( $this, 'route_request' ), 1 );
 		add_filter( 'rest_authentication_errors', array( $this, 'protect_mcp_rest_endpoint' ), 99 );
+		add_filter( 'rest_post_dispatch', array( $this, 'add_authentication_challenge' ), 10, 3 );
 	}
 
 	/**
@@ -135,6 +136,31 @@ final class Server {
 				'status' => 401,
 			)
 		);
+	}
+
+	/**
+	 * Add RFC 9728-style bearer challenge to unauthenticated MCP responses.
+	 *
+	 * @param \WP_REST_Response $response REST response.
+	 * @param \WP_REST_Server   $server   REST server.
+	 * @param \WP_REST_Request  $request  REST request.
+	 * @return \WP_REST_Response
+	 */
+	public function add_authentication_challenge( $response, $server, $request ) {
+		unset( $server );
+
+		if (
+			$response instanceof \WP_REST_Response &&
+			401 === $response->get_status() &&
+			false !== strpos( $request->get_route(), '/mcp/mcp-adapter-default-server' )
+		) {
+			$response->header(
+				'WWW-Authenticate',
+				'Bearer resource_metadata="' . esc_url_raw( self::issuer() . '/.well-known/oauth-protected-resource' ) . '"'
+			);
+		}
+
+		return $response;
 	}
 
 	/**
