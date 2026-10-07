@@ -1,0 +1,14 @@
+<?xml version="1.0"?>
+<ruleset name="WP MCP OAuth">
+	<description>WordPress Coding Standards for WP MCP OAuth.</description>
+	<rule ref="WordPress"/>
+	<rule ref="WordPress.WP.I18n">
+		<properties>
+			<property name="text_domain" type="array">
+				<element value="wp-mcp-oauth"/>
+			</property>
+		</properties>
+	</rule>
+	<file>wp-mcp-oauth.php</file>
+	<file>includes</file>
+</ruleset>
