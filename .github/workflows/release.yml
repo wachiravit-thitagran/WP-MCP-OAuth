@@ -1,0 +1,109 @@
+name: Build & Release
+
+on:
+  workflow_run:
+    workflows: ['CI']
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
+
+    steps:
+      - name: Check out tested commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          current="$(sed -n 's/^ \* Version:[[:space:]]*//p' wp-mcp-oauth.php | head -n1 | tr -d '\r')"
+          if ! printf '%s' "$current" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::Invalid plugin Version header: $current"
+            exit 1
+          fi
+
+          latest="$(git tag --list 'v[0-9]*' --sort=-v:refname | head -n1 | sed 's/^v//' || true)"
+          if [ -z "$latest" ]; then
+            next="$current"
+          elif [ "$current" != "$latest" ] && [ "$(printf '%s\n%s\n' "$current" "$latest" | sort -V | tail -n1)" = "$current" ]; then
+            next="$current"
+          else
+            IFS=. read -r major minor patch <<< "$latest"
+            next="$major.$minor.$((patch + 1))"
+          fi
+
+          echo "version=$next" >> "$GITHUB_OUTPUT"
+          echo "tag=v$next" >> "$GITHUB_OUTPUT"
+
+      - name: Stamp release version
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sed -i -E "s/^([[:space:]]*\*[[:space:]]*Version:[[:space:]]*).*/\1${VERSION}/" wp-mcp-oauth.php
+          sed -i -E "s/(define\( 'WP_MCP_OAUTH_VERSION', ')[^']*(' \);)/\1${VERSION}\2/" wp-mcp-oauth.php
+          php -l wp-mcp-oauth.php
+
+      - name: Build installable ZIP
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          rm -rf build dist
+          mkdir -p build/wp-mcp-oauth dist
+
+          cp wp-mcp-oauth.php build/wp-mcp-oauth/
+          cp -R includes build/wp-mcp-oauth/
+          cp README.md build/wp-mcp-oauth/
+
+          (
+            cd build
+            zip -qr "../dist/wp-mcp-oauth-${VERSION}.zip" wp-mcp-oauth
+          )
+
+          sha256sum "dist/wp-mcp-oauth-${VERSION}.zip" > "dist/wp-mcp-oauth-${VERSION}.zip.sha256"
+
+          unzip -Z1 "dist/wp-mcp-oauth-${VERSION}.zip" | grep -qx 'wp-mcp-oauth/wp-mcp-oauth.php'
+          unzip -Z1 "dist/wp-mcp-oauth-${VERSION}.zip" | grep -qx 'wp-mcp-oauth/includes/class-server.php'
+          unzip -Z1 "dist/wp-mcp-oauth-${VERSION}.zip" | grep -qx 'wp-mcp-oauth/includes/class-bearer-auth.php'
+          unzip -Z1 "dist/wp-mcp-oauth-${VERSION}.zip" | grep -qx 'wp-mcp-oauth/includes/class-database.php'
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wp-mcp-oauth-${{ steps.version.outputs.version }}
+          path: |
+            dist/wp-mcp-oauth-${{ steps.version.outputs.version }}.zip
+            dist/wp-mcp-oauth-${{ steps.version.outputs.version }}.zip.sha256
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          gh release create "$TAG"             "dist/wp-mcp-oauth-${VERSION}.zip"             "dist/wp-mcp-oauth-${VERSION}.zip.sha256"             --target "$RELEASE_SHA"             --title "WP MCP OAuth ${VERSION}"             --generate-notes
