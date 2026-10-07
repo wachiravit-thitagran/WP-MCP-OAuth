@@ -48,6 +48,7 @@ final class Bearer_Auth {
 	 */
 	public function boot() {
 		add_filter( 'determine_current_user', array( $this, 'determine_current_user' ), 5 );
+		add_filter( 'user_has_cap', array( $this, 'restrict_capabilities_by_scope' ), 100, 4 );
 	}
 
 	/**
@@ -101,6 +102,76 @@ final class Bearer_Auth {
 	 */
 	public function current_token() {
 		return $this->token;
+	}
+
+	/**
+	 * Apply a coarse OAuth scope boundary before WordPress capability checks.
+	 *
+	 * WordPress capabilities remain the final authorization decision. OAuth
+	 * scopes can only reduce the authenticated user's effective permissions.
+	 *
+	 * @param array $allcaps All capabilities for the user.
+	 * @param array $caps    Required capabilities.
+	 * @param array $args    Capability check arguments.
+	 * @param mixed $user    WP_User.
+	 * @return array
+	 */
+	public function restrict_capabilities_by_scope( $allcaps, $caps, $args, $user ) {
+		unset( $caps, $args, $user );
+
+		if ( ! $this->token ) {
+			return $allcaps;
+		}
+
+		if ( $this->has_scope( 'wordpress:admin' ) ) {
+			return $allcaps;
+		}
+
+		$admin_caps = array(
+			'activate_plugins',
+			'create_users',
+			'delete_plugins',
+			'delete_themes',
+			'delete_users',
+			'edit_theme_options',
+			'install_plugins',
+			'install_themes',
+			'manage_network',
+			'manage_options',
+			'manage_tutor',
+			'promote_users',
+			'switch_themes',
+			'update_core',
+			'update_plugins',
+			'update_themes',
+		);
+
+		foreach ( $admin_caps as $cap ) {
+			$allcaps[ $cap ] = false;
+		}
+
+		if ( $this->has_scope( 'wordpress:write' ) ) {
+			return $allcaps;
+		}
+
+		$write_caps = array(
+			'delete_others_posts',
+			'delete_pages',
+			'delete_posts',
+			'edit_others_posts',
+			'edit_pages',
+			'edit_posts',
+			'manage_categories',
+			'publish_pages',
+			'publish_posts',
+			'upload_files',
+		);
+
+		foreach ( $write_caps as $cap ) {
+			$allcaps[ $cap ] = false;
+		}
+
+		return $allcaps;
 	}
 
 	/**
